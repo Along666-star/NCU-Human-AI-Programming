@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<title>单摆仿真 · Pendulum Simulation</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #1a1a24;
+  }
+  #stage {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+    cursor: default;
+  }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<script>
+"use strict";
+
+/* ============================================================
+   1. 物理参数
+   ------------------------------------------------------------
+   约束给定的量：摆长 L = 200px、重力 g = 9.8、初始摆角 45°。
+   但"200 像素"与"9.8 m/s²"不在同一量纲，无法直接代入周期公式
+   T = 2π√(L/g)。因此引入比例尺 PX_PER_METER 把像素换算成米：
+       L_m = L_px / PX_PER_METER = 200 / 100 = 2.00 m
+       T   = 2π√(2.00 / 9.8)     ≈ 2.838 s
+   这样既保留了约束要求的绘制长度 200px，又让物理量纲自洽。
+   ============================================================ */
+const L_PX        = 200;        // 摆长（像素）—— 绘图长度，约束指定
+const G           = 9.8;        // 重力加速度（m/s²），约束指定
+const PX_PER_METER = 100;       // 比例尺：100 像素 = 1 米
+const THETA0_DEG  = 45;         // 初始摆角（度）
+
+const L_M    = L_PX / PX_PER_METER;        // 摆长（米）= 2.00
+const OMEGA0 = Math.sqrt(G / L_M);         // 小角度固有角频率 ω₀ = √(g/L)
+const T_SMALL = 2 * Math.PI / OMEGA0;      // 小角度理论周期 ≈ 2.838 s
+
+/* 大角度修正常数（仅用于 HUD 显示真实周期）：
+   T = T₀ · [1 + (1/4)sin²(θ₀/2) + (9/64)sin⁴(θ₀/2) + ...] */
+const S2 = Math.sin(THETA0_DEG * Math.PI / 180 / 2) ** 2;
+const T_EXACT = T_SMALL * (1 + S2 / 4 + 9 * S2 * S2 / 64);
+
+const COLORS = {
+  bg:        "#1a1a24",   // 深灰科技色（约束指定）
+  grid:      "rgba(140, 170, 220, 0.045)",
+  rod:       "rgba(150, 200, 240, 0.55)",
+  reference: "rgba(150, 200, 240, 0.16)",
+  arc:       "rgba(110, 210, 255, 0.50)",
+  trail:     "110, 210, 255",
+  bobCore:   "#eafcff",
+  bobMid:    "#7fd8ff",
+  bobEdge:   "#1d6fa8",
+  glow:      "rgba(110, 210, 255, 0.85)",
+  text:      "rgba(205, 218, 240, 0.92)",
+  textDim:   "rgba(150, 168, 196, 0.75)"
+};
+
+/* ============================================================
+   2. 状态
+   ============================================================ */
+const state = {
+  theta: THETA0_DEG * Math.PI / 180,  // 摆角（弧度），自竖直向下方向量起
+  omega: 0,                            // 角速度（rad/s）
+  t: 0,                                // 仿真时间（s）
+  trail: []                            // 摆角历史，用于绘制运动拖尾
+};
+const TRAIL_MAX = 110;
+
+/* ============================================================
+   3. 画布初始化（含高分屏适配）
+   ============================================================ */
+const canvas = document.getElementById("stage");
+const ctx = canvas.getContext("2d", { alpha: false });
+let dpr = 1, VW = 0, VH = 0;
+
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2);   // 上限 2，兼顾清晰与性能
+  VW = window.innerWidth;
+  VH = window.innerHeight;
+  canvas.width  = Math.round(VW * dpr);
+  canvas.height = Math.round(VH * dpr);
+  canvas.style.width  = VW + "px";
+  canvas.style.height = VH + "px";
+}
+window.addEventListener("resize", resize);
+resize();
+
+/* 悬点位置：随窗口高度自适应，同时保证摆球始终留在画面内 */
+function pivotOf() {
+  const x = VW / 2;
+  const y = Math.max(64, Math.min(VH * 0.22, VH - L_PX - 96));
+  return { x, y };
+}
+
+/* ============================================================
+   4. 物理积分：θ'' = -(g / L) · sin θ
+   ------------------------------------------------------------
+   使用经典四阶龙格-库塔（RK4）。相比显式欧拉法，RK4 在
+   45° 这种大摆角下不会持续累积能量，长期摆动幅度保持稳定。
+   ============================================================ */
+function angularAccel(theta) {
+  return -(G / L_M) * Math.sin(theta);
+}
+
+function integrateRK4(theta, omega, dt) {
+  // 状态向量 y = [θ, ω]，导数 f(y) = [ω, -(g/L)sinθ]
+  const k1Theta = omega;
+  const k1Omega = angularAccel(theta);
+
+  const k2Theta = omega + 0.5 * dt * k1Omega;
+  const k2Omega = angularAccel(theta + 0.5 * dt * k1Theta);
+
+  const k3Theta = omega + 0.5 * dt * k2Omega;
+  const k3Omega = angularAccel(theta + 0.5 * dt * k2Theta);
+
+  const k4Theta = omega + dt * k3Omega;
+  const k4Omega = angularAccel(theta + dt * k3Theta);
+
+  return [
+    theta + (dt / 6) * (k1Theta + 2 * k2Theta + 2 * k3Theta + k4Theta),
+    omega + (dt / 6) * (k1Omega + 2 * k2Omega + 2 * k3Omega + k4Omega)
+  ];
+}
+
+const FIXED_DT = 1 / 480;   // 固定物理步长，保证不同帧率下结果一致
+let accumulator = 0;
+
+function stepPhysics(frameDt) {
+  accumulator += frameDt;
+  let guard = 0;
+  while (accumulator >= FIXED_DT && guard++ < 480) {
+    const [th, om] = integrateRK4(state.theta, state.omega, FIXED_DT);
+    state.theta = th;
+    state.omega = om;
+    state.t += FIXED_DT;
+    accumulator -= FIXED_DT;
+  }
+  if (guard >= 480) accumulator = 0;   // 防止长时间切后台后追帧爆炸
+
+  state.trail.push(state.theta);
+  if (state.trail.length > TRAIL_MAX) state.trail.shift();
+}
+
+/* 单位质量机械能（m = 1）：E = ½(Lω)² + gL(1 - cosθ)
+   无阻尼理想模型下该值应恒定，是校验积分器正确性的直接指标 */
+function energyPerMass() {
+  const v = L_M * state.omega;
+  return 0.5 * v * v + G * L_M * (1 - Math.cos(state.theta));
+}
+
+/* ============================================================
+   5. 绘制
+   ============================================================ */
+function drawBackground() {
+  ctx.fillStyle = COLORS.bg;
+  ctx.fillRect(0, 0, VW, VH);
+
+  // 极淡网格，营造科技感但不抢主体
+  ctx.strokeStyle = COLORS.grid;
+  ctx.lineWidth = 1;
+  const gap = 40;
+  ctx.beginPath();
+  for (let x = (VW / 2) % gap; x < VW; x += gap) {
+    ctx.moveTo(Math.round(x) + 0.5, 0);
+    ctx.lineTo(Math.round(x) + 0.5, VH);
+  }
+  for (let y = (VH / 2) % gap; y < VH; y += gap) {
+    ctx.moveTo(0, Math.round(y) + 0.5);
+    ctx.lineTo(VW, Math.round(y) + 0.5);
+  }
+  ctx.stroke();
+
+  // 暗角，让视线聚焦到中心
+  const vig = ctx.createRadialGradient(
+    VW / 2, VH * 0.45, Math.min(VW, VH) * 0.15,
+    VW / 2, VH * 0.45, Math.max(VW, VH) * 0.78
+  );
+  vig.addColorStop(0, "rgba(0, 0, 0, 0)");
+  vig.addColorStop(1, "rgba(0, 0, 0, 0.42)");
+  ctx.fillStyle = vig;
+  ctx.fillRect(0, 0, VW, VH);
+}
+
+function drawTrail(px, py) {
+  const n = state.trail.length;
+  if (n < 2) return;
+  ctx.lineCap = "round";
+  for (let i = 1; i < n; i++) {
+    const a = state.trail[i - 1];
+    const b = state.trail[i];
+    const prog = i / n;                       // 越新的轨迹越亮
+    ctx.strokeStyle = "rgba(" + COLORS.trail + ", " + (prog * prog * 0.42).toFixed(3) + ")";
+    ctx.lineWidth = 0.6 + prog * 2.2;
+    ctx.beginPath();
+    ctx.moveTo(px + L_PX * Math.sin(a), py + L_PX * Math.cos(a));
+    ctx.lineTo(px + L_PX * Math.sin(b), py + L_PX * Math.cos(b));
+    ctx.stroke();
+  }
+}
+
+function drawReference(px, py) {
+  // 竖直参考线（摆角为零的方向）
+  ctx.save();
+  ctx.setLineDash([5, 7]);
+  ctx.strokeStyle = COLORS.reference;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(px + 0.5, py);
+  ctx.lineTo(px + 0.5, py + L_PX + 26);
+  ctx.stroke();
+  ctx.restore();
+
+  // 角位移圆弧
+  const r = 62;
+  const start = Math.PI / 2;
+  const end = start - state.theta;
+  ctx.save();
+  ctx.strokeStyle = COLORS.arc;
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.arc(px, py, r, Math.min(start, end), Math.max(start, end));
+  ctx.stroke();
+  ctx.restore();
+
+  // 角度数值
+  ctx.fillStyle = COLORS.textDim;
+  ctx.font = "12px Consolas, 'SF Mono', Menlo, monospace";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  const mid = start - state.theta / 2;
+  ctx.fillText(
+    (state.theta * 180 / Math.PI).toFixed(1) + "\u00B0",
+    px + (r + 8) * Math.cos(mid),
+    py + (r + 8) * Math.sin(mid)
+  );
+}
+
+function drawRod(px, py, bx, by) {
+  ctx.save();
+  ctx.strokeStyle = COLORS.rod;
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(px, py);
+  ctx.lineTo(bx, by);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawPivot(px, py) {
+  ctx.save();
+  ctx.fillStyle = "rgba(150, 200, 240, 0.30)";
+  ctx.strokeStyle = "rgba(150, 200, 240, 0.55)";
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.arc(px, py, 9, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = COLORS.bobMid;
+  ctx.beginPath();
+  ctx.arc(px, py, 2.6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawBob(bx, by) {
+  const R = 15;
+
+  // 外层柔光晕：径向渐变叠加，比单纯 shadowBlur 更均匀
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  const halo = ctx.createRadialGradient(bx, by, R * 0.5, bx, by, R * 3.0);
+  halo.addColorStop(0, "rgba(110, 210, 255, 0.15)");
+  halo.addColorStop(0.45, "rgba(110, 210, 255, 0.05)");
+  halo.addColorStop(1, "rgba(110, 210, 255, 0)");
+  ctx.fillStyle = halo;
+  ctx.beginPath();
+  ctx.arc(bx, by, R * 3.0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // 摆球本体
+  ctx.save();
+  ctx.shadowColor = COLORS.glow;
+  ctx.shadowBlur = 16;
+  const body = ctx.createRadialGradient(
+    bx - R * 0.34, by - R * 0.38, R * 0.08,
+    bx, by, R
+  );
+  body.addColorStop(0,    COLORS.bobCore);
+  body.addColorStop(0.34, COLORS.bobMid);
+  body.addColorStop(1,    COLORS.bobEdge);
+  ctx.fillStyle = body;
+  ctx.beginPath();
+  ctx.arc(bx, by, R, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 二次发光，强化"微弱发光"的层次
+  ctx.shadowBlur = 26;
+  ctx.globalAlpha = 0.28;
+  ctx.fill();
+  ctx.restore();
+
+  // 高光点
+  ctx.save();
+  ctx.fillStyle = "rgba(255, 255, 255, 0.55)";
+  ctx.beginPath();
+  ctx.arc(bx - R * 0.32, by - R * 0.38, R * 0.19, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawHUD() {
+  const thetaDeg = state.theta * 180 / Math.PI;
+  const rows = [
+    ["\u6446\u957F L",   L_PX + " px  (" + L_M.toFixed(2) + " m)"],
+    ["\u91CD\u529B g",   G.toFixed(2) + " m/s\u00B2"],
+    ["\u6446\u89D2 \u03B8", (thetaDeg >= 0 ? "+" : "") + thetaDeg.toFixed(1) + "\u00B0"],
+    ["\u89D2\u901F\u5EA6 \u03C9", (state.omega >= 0 ? "+" : "") + state.omega.toFixed(3) + " rad/s"],
+    ["\u7406\u8BBA\u5468\u671F T", T_EXACT.toFixed(3) + " s"],
+    ["\u673A\u68B0\u80FD E", energyPerMass().toFixed(3) + " J/kg"],
+    ["\u4EFF\u771F\u65F6\u95F4 t", state.t.toFixed(1) + " s"]
+  ];
+
+  const padX = 16, padY = 14, rowH = 19, titleH = 26;
+  ctx.font = "13px Consolas, 'SF Mono', Menlo, monospace";
+  let maxW = 0;
+  ctx.save();
+  ctx.font = "600 13px 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif";
+  maxW = ctx.measureText("Pendulum Simulation").width;
+  for (const key of ["\u6446\u89D2 \u03B8", "\u89D2\u901F\u5EA6 \u03C9", "\u673A\u68B0\u80FD E", "\u7406\u8BBA\u5468\u671F T"]) {
+    maxW = Math.max(maxW, ctx.measureText(key).width + 74);
+  }
+  ctx.restore();
+
+  const W = Math.max(maxW + padX * 2, 216);
+  const H = titleH + rows.length * rowH + padY * 2 - 4;
+  const x = 22, y = 22;
+
+  ctx.save();
+  // 面板
+  ctx.fillStyle = "rgba(26, 26, 36, 0.78)";
+  ctx.strokeStyle = "rgba(110, 210, 255, 0.20)";
+  ctx.lineWidth = 1;
+  roundRect(x, y, W, H, 10);
+  ctx.fill();
+  ctx.stroke();
+
+  // 标题
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = COLORS.text;
+  ctx.font = "600 13px 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif";
+  ctx.fillText("Pendulum Simulation", x + padX, y + padY + 6);
+
+  // 分隔线
+  ctx.strokeStyle = "rgba(110, 210, 255, 0.14)";
+  ctx.beginPath();
+  ctx.moveTo(x + padX, y + padY + titleH - 4);
+  ctx.lineTo(x + W - padX, y + padY + titleH - 4);
+  ctx.stroke();
+
+  // 数据行
+  let ry = y + padY + titleH + 9;
+  for (const [key, val] of rows) {
+    ctx.font = "12px 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif";
+    ctx.fillStyle = COLORS.textDim;
+    ctx.fillText(key, x + padX, ry);
+    ctx.font = "12px Consolas, 'SF Mono', Menlo, monospace";
+    ctx.fillStyle = COLORS.text;
+    ctx.textAlign = "right";
+    ctx.fillText(val, x + W - padX, ry);
+    ctx.textAlign = "left";
+    ry += rowH;
+  }
+  ctx.restore();
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y,     x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x,     y + h, r);
+  ctx.arcTo(x,     y + h, x,     y,     r);
+  ctx.arcTo(x,     y,     x + w, y,     r);
+  ctx.closePath();
+}
+
+function render() {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const { x: px, y: py } = pivotOf();
+  const bx = px + L_PX * Math.sin(state.theta);
+  const by = py + L_PX * Math.cos(state.theta);
+
+  drawBackground();
+  drawTrail(px, py);
+  drawReference(px, py);
+  drawRod(px, py, bx, by);
+  drawBob(bx, by);
+  drawPivot(px, py);
+  drawHUD();
+}
+
+/* ============================================================
+   6. 主循环：requestAnimationFrame 驱动
+   ============================================================ */
+let lastTs = 0;
+
+function loop(ts) {
+  if (!lastTs) lastTs = ts;
+  // 帧间隔限幅：避免切后台再切回时物理瞬间"跳跃"
+  const frameDt = Math.min((ts - lastTs) / 1000, 0.05);
+  lastTs = ts;
+
+  stepPhysics(frameDt);
+  render();
+
+  requestAnimationFrame(loop);
+}
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
