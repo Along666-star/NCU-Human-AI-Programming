@@ -45,24 +45,24 @@ NCU-Human-AI-Programming/                    # 作品集主仓库根目录
 ├── README.md                                # 本文件：仓库总说明
 ├── .gitignore                               # Git 忽略规则清单
 │
-├── （第01周）开发环境搭建与人机协作启程/
+├── week01_dev_env_setup/                    # 第01周 开发环境搭建与人机协作启程
 │   ├── README.md                            # 本周实验报告
 │   └── ...                                  # 源码与笔记
-├── （第02周）Markdown 与项目文档写作/
-├── （第03周）Python 编程基础与人机结对/
-├── （第04周）数据结构与算法初步/
-├── （第05周）意图造物与 ReAct 闭环编程/
-├── （第06周）提示词工程与结构化输出/
-├── （第07周）数据采集与数据清洗/
-├── （第08周）数据可视化与分析/
-├── （第09周）Web 前端基础与界面生成/
-├── （第10周）后端 API 与数据库入门/
-├── （第11周）大语言模型 API 调用与对话应用/
-├── （第12周）RAG 检索增强生成实践/
-├── （第13周）Agent 智能体与工具调用/
-├── （第14周）多模态应用（图像与语音）/
-├── （第15周）测试、调试与代码质量/
-├── （第16周）综合项目：作品集打磨与成果展示/
+├── week02_markdown_docs/                    # 第02周 Markdown 与项目文档写作
+├── week03_python_basics/                    # 第03周 Python 编程基础与人机结对
+├── week04_algorithms/                       # 第04周 数据结构与算法初步
+├── week05_pendulum_sim/                     # 第05周 单摆仿真（独立无菌工作区）★
+├── week06_prompt_engineering/               # 第06周 提示词工程与结构化输出
+├── week07_data_collection/                  # 第07周 数据采集与数据清洗
+├── week08_data_visualization/               # 第08周 数据可视化与分析
+├── week09_web_frontend/                     # 第09周 Web 前端基础与界面生成
+├── week10_backend_api/                      # 第10周 后端 API 与数据库入门
+├── week11_llm_api_chat/                     # 第11周 大语言模型 API 调用与对话应用
+├── week12_rag_retrieval/                    # 第12周 RAG 检索增强生成实践
+├── week13_agent_tool_calling/               # 第13周 Agent 智能体与工具调用
+├── week14_multimodal_app/                   # 第14周 多模态应用（图像与语音）
+├── week15_testing_quality/                  # 第15周 测试、调试与代码质量
+├── week16_final_project/                    # 第16周 综合项目：作品集打磨与成果展示
 │   ├── README.md
 │   └── assets/                              # 演示截图、汇报材料
 │
@@ -82,7 +82,7 @@ NCU-Human-AI-Programming/                    # 作品集主仓库根目录
 | 02 | Markdown 与项目文档写作 | ⬜ 未开始 |
 | 03 | Python 编程基础与人机结对 | ⬜ 未开始 |
 | 04 | 数据结构与算法初步 | ⬜ 未开始 |
-| 05 | 意图造物与 ReAct 闭环编程 | ⬜ 未开始 |
+| 05 | 单摆仿真（Pendulum Simulation） | 🔄 进行中 |
 | 06 | 提示词工程与结构化输出 | ⬜ 未开始 |
 | 07 | 数据采集与数据清洗 | ⬜ 未开始 |
 | 08 | 数据可视化与分析 | ⬜ 未开始 |
