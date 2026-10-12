@@ -13,42 +13,147 @@
     overflow: hidden;
     background: #1a1a24;
   }
+  body {
+    display: flex;
+    flex-direction: column;
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+
+  /* 画布区：占据除控制面板外的全部高度 */
+  #stageWrap {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;          /* 允许 flex 子项收缩，否则会被内容顶高 */
+    overflow: hidden;
+  }
   #stage {
     display: block;
-    width: 100vw;
-    height: 100vh;
-    cursor: default;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* 控制面板：画布下方，深色质感延续 */
+  #panel {
+    flex: 0 0 auto;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px 26px;
+    box-sizing: border-box;
+    padding: 13px 22px 15px;
+    background: #16161f;
+    border-top: 1px solid rgba(110, 210, 255, 0.18);
+    color: #cddaf0;
+    font-size: 13px;
+  }
+  .ctrl {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .ctrl > label {
+    color: #96a8c4;
+    white-space: nowrap;
+  }
+  .ctrl > input[type="range"] {
+    width: 152px;
+    height: 20px;
+    margin: 0;
+    accent-color: #7fd8ff;
+    cursor: pointer;
+  }
+  .ctrl > output {
+    min-width: 122px;
+    text-align: right;
+    font-family: Consolas, "SF Mono", Menlo, monospace;
+    color: #eafcff;
+  }
+  #btnReset {
+    margin-left: auto;
+    padding: 8px 20px;
+    border-radius: 8px;
+    border: 1px solid rgba(110, 210, 255, 0.45);
+    background: rgba(110, 210, 255, 0.10);
+    color: #cdeeff;
+    font-family: inherit;
+    font-size: 13px;
+    line-height: 1.2;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  #btnReset:hover {
+    background: rgba(110, 210, 255, 0.20);
+    border-color: rgba(110, 210, 255, 0.70);
+  }
+  #btnReset:active {
+    background: rgba(110, 210, 255, 0.30);
+  }
+  #btnReset:focus-visible,
+  .ctrl > input[type="range"]:focus-visible {
+    outline: 2px solid rgba(110, 210, 255, 0.75);
+    outline-offset: 2px;
   }
 </style>
 </head>
 <body>
-<canvas id="stage"></canvas>
+
+<div id="stageWrap">
+  <canvas id="stage"></canvas>
+</div>
+
+<div id="panel">
+  <div class="ctrl">
+    <label for="rangeLen">摆长 L</label>
+    <input id="rangeLen" type="range" min="100" max="350" step="1" value="200">
+    <output id="outLen" for="rangeLen">200 px (2.00 m)</output>
+  </div>
+
+  <div class="ctrl">
+    <label for="rangeG">重力 g</label>
+    <input id="rangeG" type="range" min="1" max="25" step="0.1" value="9.8">
+    <output id="outG" for="rangeG">9.80 m/s²</output>
+  </div>
+
+  <div class="ctrl">
+    <label for="rangeC">阻尼 c</label>
+    <input id="rangeC" type="range" min="0" max="0.01" step="0.0002" value="0">
+    <output id="outC" for="rangeC">0.0000</output>
+  </div>
+
+  <button id="btnReset" type="button">重置摆动</button>
+</div>
+
 <script>
 "use strict";
 
 /* ============================================================
-   1. 物理参数
+   1. 参数
    ------------------------------------------------------------
-   约束给定的量：摆长 L = 200px、重力 g = 9.8、初始摆角 45°。
+   约束给定的初始量：摆长 L = 200px、重力 g = 9.8、初始摆角 45°。
    但"200 像素"与"9.8 m/s²"不在同一量纲，无法直接代入周期公式
    T = 2π√(L/g)。因此引入比例尺 PX_PER_METER 把像素换算成米：
        L_m = L_px / PX_PER_METER = 200 / 100 = 2.00 m
-       T   = 2π√(2.00 / 9.8)     ≈ 2.838 s
+       T₀  = 2π√(2.00 / 9.8)     ≈ 2.838 s
    这样既保留了约束要求的绘制长度 200px，又让物理量纲自洽。
+
+   以下参数均可由界面滑块实时调整，物理层每步读取最新值，
+   因此拖动滑块时模拟立即响应，无需重启。
    ============================================================ */
-const L_PX        = 200;        // 摆长（像素）—— 绘图长度，约束指定
-const G           = 9.8;        // 重力加速度（m/s²），约束指定
-const PX_PER_METER = 100;       // 比例尺：100 像素 = 1 米
-const THETA0_DEG  = 45;         // 初始摆角（度）
+const PX_PER_METER = 100;          // 比例尺：100 像素 = 1 米
+const THETA0_DEG   = 45;           // 初始摆角（度）
 
-const L_M    = L_PX / PX_PER_METER;        // 摆长（米）= 2.00
-const OMEGA0 = Math.sqrt(G / L_M);         // 小角度固有角频率 ω₀ = √(g/L)
-const T_SMALL = 2 * Math.PI / OMEGA0;      // 小角度理论周期 ≈ 2.838 s
+const params = {
+  L:       200,   // 摆长（像素），滑块范围 100 ~ 350
+  g:       9.8,   // 重力加速度（m/s²），滑块范围 1 ~ 25
+  damping: 0      // 阻尼系数 c，方程 θ'' = -(g/L)·sinθ - c·θ'
+};
 
-/* 大角度修正常数（仅用于 HUD 显示真实周期）：
-   T = T₀ · [1 + (1/4)sin²(θ₀/2) + (9/64)sin⁴(θ₀/2) + ...] */
-const S2 = Math.sin(THETA0_DEG * Math.PI / 180 / 2) ** 2;
-const T_EXACT = T_SMALL * (1 + S2 / 4 + 9 * S2 * S2 / 64);
+/* —— 由参数派生的物理量（每帧重算，保证滑块一变就同步） —— */
+function armMeters()   { return params.L / PX_PER_METER; }
+function omega0()      { return Math.sqrt(params.g / armMeters()); }
+function periodRef()   { return 2 * Math.PI / omega0(); }        // 无阻尼参考周期
+function dampingRatio(){ return params.damping / (2 * omega0()); } // 阻尼比 ζ
+function decayTau()    { return params.damping > 0 ? 2 / params.damping : Infinity; }
 
 const COLORS = {
   bg:        "#1a1a24",   // 深灰科技色（约束指定）
@@ -76,59 +181,82 @@ const state = {
 };
 const TRAIL_MAX = 110;
 
+/* 复位：摆球精准回到 45° 初始状态（参数与滑块保持不变） */
+function resetPendulum() {
+  state.theta = THETA0_DEG * Math.PI / 180;
+  state.omega = 0;
+  state.t = 0;
+  state.trail.length = 0;
+  accumulator = 0;
+}
+
 /* ============================================================
    3. 画布初始化（含高分屏适配）
+   ------------------------------------------------------------
+   画布尺寸取自其 CSS 布局尺寸（由 flex 决定），不再写死为
+   视口大小，这样控制面板出现后画布会自动占满剩余空间。
    ============================================================ */
 const canvas = document.getElementById("stage");
 const ctx = canvas.getContext("2d", { alpha: false });
 let dpr = 1, VW = 0, VH = 0;
 
 function resize() {
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  if (!w || !h) return;                              // 布局尚未就绪时跳过
   dpr = Math.min(window.devicePixelRatio || 1, 2);   // 上限 2，兼顾清晰与性能
-  VW = window.innerWidth;
-  VH = window.innerHeight;
-  canvas.width  = Math.round(VW * dpr);
-  canvas.height = Math.round(VH * dpr);
-  canvas.style.width  = VW + "px";
-  canvas.style.height = VH + "px";
+  VW = w;
+  VH = h;
+  canvas.width  = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
 }
+
 window.addEventListener("resize", resize);
+if (typeof ResizeObserver !== "undefined") {
+  // 面板换行、字体加载等导致画布尺寸变化时也能跟上
+  new ResizeObserver(resize).observe(canvas);
+}
 resize();
 
-/* 悬点位置：随窗口高度自适应，同时保证摆球始终留在画面内 */
+/* 悬点位置：随画布高度与摆长自适应，保证摆球尽量留在画面内 */
 function pivotOf() {
   const x = VW / 2;
-  const y = Math.max(64, Math.min(VH * 0.22, VH - L_PX - 96));
+  const y = Math.max(32, Math.min(VH * 0.22, VH - params.L - 46));
   return { x, y };
 }
 
 /* ============================================================
-   4. 物理积分：θ'' = -(g / L) · sin θ
+   4. 物理积分：θ'' = -(g / L) · sin θ - c · θ'
    ------------------------------------------------------------
    使用经典四阶龙格-库塔（RK4）。相比显式欧拉法，RK4 在
    45° 这种大摆角下不会持续累积能量，长期摆动幅度保持稳定。
+   阻尼项 -c·θ' 直接并入导数，各中间级同步计算，保证精度。
    ============================================================ */
-function angularAccel(theta) {
-  return -(G / L_M) * Math.sin(theta);
-}
-
 function integrateRK4(theta, omega, dt) {
-  // 状态向量 y = [θ, ω]，导数 f(y) = [ω, -(g/L)sinθ]
-  const k1Theta = omega;
-  const k1Omega = angularAccel(theta);
+  const k = params.g / armMeters();
+  const c = params.damping;
 
-  const k2Theta = omega + 0.5 * dt * k1Omega;
-  const k2Omega = angularAccel(theta + 0.5 * dt * k1Theta);
+  const k1t = omega;
+  const k1o = -k * Math.sin(theta) - c * omega;
 
-  const k3Theta = omega + 0.5 * dt * k2Omega;
-  const k3Omega = angularAccel(theta + 0.5 * dt * k2Theta);
+  const t2 = theta + 0.5 * dt * k1t;
+  const o2 = omega + 0.5 * dt * k1o;
+  const k2t = o2;
+  const k2o = -k * Math.sin(t2) - c * o2;
 
-  const k4Theta = omega + dt * k3Omega;
-  const k4Omega = angularAccel(theta + dt * k3Theta);
+  const t3 = theta + 0.5 * dt * k2t;
+  const o3 = omega + 0.5 * dt * k2o;
+  const k3t = o3;
+  const k3o = -k * Math.sin(t3) - c * o3;
+
+  const t4 = theta + dt * k3t;
+  const o4 = omega + dt * k3o;
+  const k4t = o4;
+  const k4o = -k * Math.sin(t4) - c * o4;
 
   return [
-    theta + (dt / 6) * (k1Theta + 2 * k2Theta + 2 * k3Theta + k4Theta),
-    omega + (dt / 6) * (k1Omega + 2 * k2Omega + 2 * k3Omega + k4Omega)
+    theta + (dt / 6) * (k1t + 2 * k2t + 2 * k3t + k4t),
+    omega + (dt / 6) * (k1o + 2 * k2o + 2 * k3o + k4o)
   ];
 }
 
@@ -152,10 +280,12 @@ function stepPhysics(frameDt) {
 }
 
 /* 单位质量机械能（m = 1）：E = ½(Lω)² + gL(1 - cosθ)
-   无阻尼理想模型下该值应恒定，是校验积分器正确性的直接指标 */
+   无阻尼时该值应恒定，是校验积分器正确性的直接指标；
+   开启阻尼后它会单调下降，正好直观反映能量耗散 */
 function energyPerMass() {
-  const v = L_M * state.omega;
-  return 0.5 * v * v + G * L_M * (1 - Math.cos(state.theta));
+  const Lm = armMeters();
+  const v = Lm * state.omega;
+  return 0.5 * v * v + params.g * Lm * (1 - Math.cos(state.theta));
 }
 
 /* ============================================================
@@ -194,6 +324,7 @@ function drawBackground() {
 function drawTrail(px, py) {
   const n = state.trail.length;
   if (n < 2) return;
+  const L = params.L;
   ctx.lineCap = "round";
   for (let i = 1; i < n; i++) {
     const a = state.trail[i - 1];
@@ -202,8 +333,8 @@ function drawTrail(px, py) {
     ctx.strokeStyle = "rgba(" + COLORS.trail + ", " + (prog * prog * 0.42).toFixed(3) + ")";
     ctx.lineWidth = 0.6 + prog * 2.2;
     ctx.beginPath();
-    ctx.moveTo(px + L_PX * Math.sin(a), py + L_PX * Math.cos(a));
-    ctx.lineTo(px + L_PX * Math.sin(b), py + L_PX * Math.cos(b));
+    ctx.moveTo(px + L * Math.sin(a), py + L * Math.cos(a));
+    ctx.lineTo(px + L * Math.sin(b), py + L * Math.cos(b));
     ctx.stroke();
   }
 }
@@ -216,7 +347,7 @@ function drawReference(px, py) {
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(px + 0.5, py);
-  ctx.lineTo(px + 0.5, py + L_PX + 26);
+  ctx.lineTo(px + 0.5, py + params.L + 26);
   ctx.stroke();
   ctx.restore();
 
@@ -321,28 +452,31 @@ function drawBob(bx, by) {
 
 function drawHUD() {
   const thetaDeg = state.theta * 180 / Math.PI;
+  const tau = decayTau();
   const rows = [
-    ["\u6446\u957F L",   L_PX + " px  (" + L_M.toFixed(2) + " m)"],
-    ["\u91CD\u529B g",   G.toFixed(2) + " m/s\u00B2"],
-    ["\u6446\u89D2 \u03B8", (thetaDeg >= 0 ? "+" : "") + thetaDeg.toFixed(1) + "\u00B0"],
-    ["\u89D2\u901F\u5EA6 \u03C9", (state.omega >= 0 ? "+" : "") + state.omega.toFixed(3) + " rad/s"],
-    ["\u7406\u8BBA\u5468\u671F T", T_EXACT.toFixed(3) + " s"],
-    ["\u673A\u68B0\u80FD E", energyPerMass().toFixed(3) + " J/kg"],
-    ["\u4EFF\u771F\u65F6\u95F4 t", state.t.toFixed(1) + " s"]
+    ["摆长 L",      params.L + " px  (" + armMeters().toFixed(2) + " m)"],
+    ["重力 g",      params.g.toFixed(2) + " m/s²"],
+    ["阻尼 c",      params.damping.toFixed(4)],
+    ["阻尼比 ζ",    dampingRatio().toFixed(4)],
+    ["摆角 θ",      (thetaDeg >= 0 ? "+" : "") + thetaDeg.toFixed(1) + "°"],
+    ["角速度 ω",    (state.omega >= 0 ? "+" : "") + state.omega.toFixed(3) + " rad/s"],
+    ["周期 T₀",     periodRef().toFixed(3) + " s"],
+    ["衰减时间 τ",  tau === Infinity ? "∞" : tau.toFixed(1) + " s"],
+    ["机械能 E",    energyPerMass().toFixed(3) + " J/kg"],
+    ["仿真时间 t",  state.t.toFixed(1) + " s"]
   ];
 
   const padX = 16, padY = 14, rowH = 19, titleH = 26;
-  ctx.font = "13px Consolas, 'SF Mono', Menlo, monospace";
-  let maxW = 0;
+  let maxW = 232;
   ctx.save();
   ctx.font = "600 13px 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif";
-  maxW = ctx.measureText("Pendulum Simulation").width;
-  for (const key of ["\u6446\u89D2 \u03B8", "\u89D2\u901F\u5EA6 \u03C9", "\u673A\u68B0\u80FD E", "\u7406\u8BBA\u5468\u671F T"]) {
-    maxW = Math.max(maxW, ctx.measureText(key).width + 74);
+  maxW = Math.max(maxW, ctx.measureText("Pendulum Simulation").width + padX * 2);
+  for (const key of ["角速度 ω", "衰减时间 τ", "机械能 E", "阻尼比 ζ"]) {
+    maxW = Math.max(maxW, ctx.measureText(key).width + 100);
   }
   ctx.restore();
 
-  const W = Math.max(maxW + padX * 2, 216);
+  const W = maxW;
   const H = titleH + rows.length * rowH + padY * 2 - 4;
   const x = 22, y = 22;
 
@@ -399,8 +533,9 @@ function render() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   const { x: px, y: py } = pivotOf();
-  const bx = px + L_PX * Math.sin(state.theta);
-  const by = py + L_PX * Math.cos(state.theta);
+  const L = params.L;
+  const bx = px + L * Math.sin(state.theta);
+  const by = py + L * Math.cos(state.theta);
 
   drawBackground();
   drawTrail(px, py);
@@ -412,7 +547,45 @@ function render() {
 }
 
 /* ============================================================
-   6. 主循环：requestAnimationFrame 驱动
+   6. 控制面板绑定
+   ------------------------------------------------------------
+   滑块只改 params，物理层下一步即读取新值，故响应是实时的。
+   复位按钮只重置摆球运动状态，保留用户当前的参数设置。
+   ============================================================ */
+const elLen   = document.getElementById("rangeLen");
+const elG     = document.getElementById("rangeG");
+const elC     = document.getElementById("rangeC");
+const outLen  = document.getElementById("outLen");
+const outG    = document.getElementById("outG");
+const outC    = document.getElementById("outC");
+const btnReset = document.getElementById("btnReset");
+
+function syncControlLabels() {
+  outLen.value = params.L + " px (" + armMeters().toFixed(2) + " m)";
+  outG.value = params.g.toFixed(2) + " m/s²";
+  outC.value = params.damping.toFixed(4);
+}
+
+function applyControls() {
+  params.L       = Number(elLen.value);
+  params.g       = Number(elG.value);
+  params.damping = Number(elC.value);
+  syncControlLabels();
+}
+
+elLen.addEventListener("input", applyControls);
+elG.addEventListener("input", applyControls);
+elC.addEventListener("input", applyControls);
+btnReset.addEventListener("click", resetPendulum);
+
+/* 初始化：让 params 与 HTML 中滑块的 value 保持一致 */
+elLen.value = params.L;
+elG.value   = params.g;
+elC.value   = params.damping;
+applyControls();
+
+/* ============================================================
+   7. 主循环：requestAnimationFrame 驱动
    ============================================================ */
 let lastTs = 0;
 
